@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-primary: #7c6af5;
+    --color-accent: #00f5c4;
+    --color-bg: #0a0a0f;
+    --color-surface: #1a1a2e;
+    --color-border: rgba(124, 106, 245, 0.15);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-dark-950 text-gray-100 font-sans antialiased;
+    background-image: 
+      radial-gradient(ellipse at top left, rgba(124, 106, 245, 0.08) 0%, transparent 50%),
+      radial-gradient(ellipse at bottom right, rgba(0, 245, 196, 0.05) 0%, transparent 50%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(26, 26, 46, 0.5);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(124, 106, 245, 0.4);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(124, 106, 245, 0.7);
+  }
+
+  /* Prose styles for markdown rendering */
+  .prose-quantum {
+    @apply text-gray-300 leading-relaxed;
+  }
+  .prose-quantum h1 { @apply text-2xl font-bold text-white mb-4 mt-6 border-b border-primary-500/20 pb-2; }
+  .prose-quantum h2 { @apply text-xl font-semibold text-gray-100 mb-3 mt-5; }
+  .prose-quantum h3 { @apply text-lg font-medium text-gray-200 mb-2 mt-4; }
+  .prose-quantum p { @apply mb-3; }
+  .prose-quantum ul { @apply list-disc list-inside mb-3 space-y-1; }
+  .prose-quantum ol { @apply list-decimal list-inside mb-3 space-y-1; }
+  .prose-quantum li { @apply text-gray-300; }
+  .prose-quantum a { @apply text-primary-400 underline hover:text-primary-300; }
+  .prose-quantum strong { @apply text-white font-semibold; }
+  .prose-quantum em { @apply text-gray-300 italic; }
+  .prose-quantum code { @apply bg-dark-800 text-accent-400 px-1.5 py-0.5 rounded text-sm font-mono; }
+  .prose-quantum pre { @apply bg-dark-900 border border-primary-500/20 rounded-lg p-4 mb-4 overflow-x-auto; }
+  .prose-quantum pre code { @apply bg-transparent text-accent-300 p-0; }
+  .prose-quantum blockquote { @apply border-l-2 border-primary-500 pl-4 text-gray-400 italic mb-3; }
+  .prose-quantum hr { @apply border-gray-700 my-4; }
+  .prose-quantum table { @apply w-full border-collapse mb-4 text-sm; }
+  .prose-quantum th { @apply bg-dark-800 px-3 py-2 text-left text-gray-200 font-semibold border-b border-gray-600; }
+  .prose-quantum td { @apply px-3 py-2 border-b border-dark-700; }
+}
+
+@layer components {
+  /* Glass card effect */
+  .glass-card {
+    @apply bg-dark-900/60 backdrop-blur-sm border border-white/5 rounded-xl;
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-200 hover:border-primary-500/30 hover:bg-dark-800/60;
+  }
+
+  /* Glow effect */
+  .glow-primary {
+    box-shadow: 0 0 20px rgba(124, 106, 245, 0.3);
+  }
+  .glow-accent {
+    box-shadow: 0 0 20px rgba(0, 245, 196, 0.3);
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-400 to-accent-400 bg-clip-text text-transparent;
+  }
+
+  /* Sidebar active state */
+  .nav-active {
+    @apply bg-primary-500/15 text-primary-300 border-r-2 border-primary-500;
+  }
+}
