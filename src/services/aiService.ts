@@ -1,82 +1,251 @@
-import { AI_SYSTEM_PROMPT } from '../utils/constants';
+// src/services/aiService.ts
+// Conexión con Claude API — el cerebro de Quantum Notes AI
 
+import type { Note } from '../lib/supabase'
+
+const CLAUDE_MODEL = 'claude-sonnet-4-20250514'
+
+// ============================================================
+// SYSTEM PROMPT — Personalidad de Quantum AI
+// ============================================================
+
+const buildSystemPrompt = (profile?: {
+  name?: string
+  gpa_current?: number
+  cf_current?: number
+  papers_current?: number
+}) => `Eres "Quantum AI", el asistente de estudio personal integrado en Quantum Notes AI.
+
+USUARIO:
+- Nombre: ${profile?.name || 'Alice'}
+- Universidad: UCSP (Arequipa, Perú) — Ingeniería de Software
+- Meta: KAIST Master's in Computer Science / Quantum Computing (2029)
+- GPA actual: ${profile?.gpa_current || 13.8}/20 → meta: 16.0
+- CF Rating: ${profile?.cf_current || 1250} → meta: 2000
+- Papers publicados: ${profile?.papers_current || 0} → meta: 3
+
+PERSONALIDAD:
+- Eres directo, exigente pero motivador. Como un compañero de KAIST que ya logró lo que el usuario persigue.
+- Hablas en español por defecto. Cambias a inglés si el tema lo requiere (papers, código, algoritmos).
+- NO dices "¡Claro!" ni "¡Excelente pregunta!" — respondes y punto.
+- Máximo 250 palabras por respuesta salvo que pidan más detalle.
+- Usas emojis con moderación, solo cuando añaden valor.
+
+MODOS (se activan automáticamente según el mensaje):
+- CHAT: Responde cualquier pregunta académica, CP, quantum, ML, idiomas.
+- QUIZ (trigger: "quiz me" / "quizéame" / "pregúntame"): Genera 3-5 preguntas de opción múltiple. NO reveles la respuesta hasta que el usuario responda.
+- EXPLAIN (trigger: "explícame como..." / "no entiendo"): Usa analogías simples y diagramas ASCII si aplica.
+- STUDY PLAN (trigger: "tengo examen" / "tengo parcial" / "deadline en X días"): Crea plan de estudio priorizado día a día.
+- MOTIVATE (trigger: "motívame" / "estoy desmotivado" / "quiero rendirme"): Recuerda el objetivo KAIST, el rechazo de Hungría y PRONABEC como combustible.
+- SUMMARIZE (trigger: "resúmeme" / "resumen de"): Resume notas en bullet points accionables.
+
+REGLAS:
+1. Cuando respondas basado en las notas del usuario, cita la fuente: "[Nota: Título]"
+2. Para código usa Python o C++ según el contexto.
+3. Si el usuario está desmotivado, recuérdale el rechazo de Hungría y PRONABEC como combustible hacia KAIST.
+4. En respuestas largas termina con una pregunta de follow-up relevante.
+5. Si no sabes algo, dilo directamente — no inventes.`
+
+// ============================================================
+// LLAMADA PRINCIPAL A CLAUDE
+// ============================================================
+
+export interface Message {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp?: string
+}
+
+export const callClaude = async (
+  messages: Message[],
+  notes: Note[] = [],
+  profile?: { name?: string; gpa_current?: number; cf_current?: number; papers_current?: number }
+): Promise<string> => {
+
+  // Construir contexto de notas para RAG básico
+  const notesContext = notes.length > 0
+    ? `\n\n[NOTAS DEL USUARIO — usa esto como contexto]\n${
+        notes.slice(0, 10).map(n =>
+          `📝 "${n.title}" (${n.tags?.join(', ') || 'sin tags'})\n${n.content?.slice(0, 300)}${(n.content?.length || 0) > 300 ? '...' : ''}`
+        ).join('\n\n---\n\n')
+      }`
+    : ''
+
+  // Inyectar contexto en el último mensaje del usuario
+  const messagesWithContext = messages.map((m, i) => ({
+    role: m.role,
+    content: i === messages.length - 1 && m.role === 'user' && notesContext
+      ? `${m.content}${notesContext}`
+      : m.content
+  }))
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': import.meta.env.VITE_ANTHROPIC_KEY || '',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 1000,
+      system: buildSystemPrompt(profile) ,
+      messages: messagesWithContext
+    })
+  })
+
+  if (!response.ok) {
+    const err = await response.json()
+    throw new Error(err.error?.message || `Error ${response.status}`)
+  }
+
+  const data = await response.json()
+  return data.content?.map((b: { type: string; text?: string }) => b.text || '').join('') || 'Sin respuesta.'
+}
+
+// ============================================================
+// GENERAR TÍTULO AUTOMÁTICO PARA CONVERSACIÓN
+// ============================================================
+
+export const generateConversationTitle = async (firstMessage: string): Promise<string> => {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': import.meta.env.VITE_ANTHROPIC_KEY || '',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 20,
+      system: 'Genera un título de máximo 5 palabras para esta conversación. Solo el título, sin comillas ni puntuación.',
+      messages: [{ role: 'user', content: firstMessage }]
+    })
+  })
+
+  if (!response.ok) return 'Nueva conversación'
+  const data = await response.json()
+  return data.content?.[0]?.text || 'Nueva conversación'
+}
+
+// ============================================================
+// GENERAR RESUMEN DE NOTA PARA AI CONTEXT
+// ============================================================
+
+export const generateNoteSummary = async (title: string, content: string): Promise<string> => {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': import.meta.env.VITE_ANTHROPIC_KEY || '',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 100,
+      system: 'Genera un resumen de máximo 2 oraciones de esta nota. Solo el resumen, sin introducción.',
+      messages: [{ role: 'user', content: `Título: ${title}\n\nContenido: ${content}` }]
+    })
+  })
+
+  if (!response.ok) return ''
+  const data = await response.json()
+  return data.content?.[0]?.text || ''
+}
+
+// ============================================================
+// GENERAR QUIZ DESDE NOTAS
+// ============================================================
+
+export const generateQuiz = async (notes: Note[], topic?: string): Promise<string> => {
+  const notesText = notes.slice(0, 5).map(n =>
+    `"${n.title}": ${n.content?.slice(0, 500)}`
+  ).join('\n\n')
+
+  const prompt = topic
+    ? `Genera 5 preguntas de opción múltiple sobre "${topic}" basadas en estas notas:\n\n${notesText}`
+    : `Genera 5 preguntas de opción múltiple basadas en estas notas:\n\n${notesText}`
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': import.meta.env.VITE_ANTHROPIC_KEY || '',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 800,
+      system: 'Eres un generador de quizzes académicos. Crea preguntas claras con 4 opciones (a, b, c, d). Marca la correcta con ✓. Incluye una explicación breve de cada respuesta.',
+      messages: [{ role: 'user', content: prompt }]
+    })
+  })
+
+  if (!response.ok) throw new Error('Error generando quiz')
+  const data = await response.json()
+  return data.content?.[0]?.text || ''
+}
+
+//capa de compatiblidad para aipage.tsx
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
+  role: 'user' | 'assistant'
+  content: string
 }
 
-interface OpenAIResponse {
-  choices: Array<{
-    message: {
-      content: string;
-    };
-  }>;
-}
-
-export async function sendMessage(
+export const sendMessage = async (
   messages: ChatMessage[],
   notesContext?: string
-): Promise<string> {
-  const apiKey = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
+): Promise<string> => {
+  const contextSuffix = notesContext
+    ? `\n\n[NOTAS DEL USUARIO]\n${notesContext}`
+    : ''
 
-  if (!apiKey || apiKey === 'your_openai_api_key_here') {
-    // Return a mock response if no API key configured
-    return getMockResponse(messages[messages.length - 1]?.content ?? '');
+  const messagesWithContext = messages.map((m, i) => ({
+    role: m.role,
+    content: i === messages.length - 1 && m.role === 'user' && contextSuffix
+      ? `${m.content}${contextSuffix}`
+      : m.content
+  }))
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': import.meta.env.VITE_ANTHROPIC_KEY || '',
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: `Eres "Quantum AI", el asistente de estudio personal de Alice. 
+Estudiante de CS en UCSP (Arequipa, Perú), meta: KAIST Master's 2029.
+GPA actual: owo → meta 16.0. CF Rating: 1250 → meta 2000.
+
+PERSONALIDAD:
+- Directo, exigente pero motivador. Como un compañero de KAIST.
+- Español por defecto, inglés para código/papers.
+- NO dices "¡Claro!" ni "¡Excelente pregunta!"
+- Máximo 250 palabras salvo que pidan más detalle.
+
+MODOS:
+- QUIZ (trigger: "quiz me"): genera preguntas de opción múltiple, no reveles respuesta hasta que el usuario responda.
+- EXPLAIN (trigger: "explícame como..."): usa analogías simples y ASCII si aplica.
+- STUDY PLAN (trigger: "tengo examen en X"): plan día a día priorizado.
+- MOTIVATE (trigger: "motívame"): recuerda KAIST, el rechazo de Hungría como combustible.`,
+      messages: messagesWithContext
+    })
+  })
+
+  if (!response.ok) {
+    const err = await response.json()
+    throw new Error(err.error?.message || `Error ${response.status}`)
   }
 
-  const systemMessage: ChatMessage = {
-    role: 'system',
-    content: notesContext
-      ? `${AI_SYSTEM_PROMPT}\n\n---\nCONTEXTO DE NOTAS DEL USUARIO:\n${notesContext}`
-      : AI_SYSTEM_PROMPT,
-  };
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [systemMessage, ...messages],
-        max_tokens: 600,
-        temperature: 0.7,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error((error as { error?: { message?: string } }).error?.message ?? `HTTP ${response.status}`);
-    }
-
-    const data = (await response.json()) as OpenAIResponse;
-    return data.choices[0]?.message?.content ?? 'Sin respuesta del servidor.';
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : 'Error desconocido';
-    return `❌ Error al conectar con la IA: ${msg}\n\nVerifica tu clave de API en el archivo .env`;
-  }
-}
-
-function getMockResponse(userMessage: string): string {
-  const lower = userMessage.toLowerCase();
-
-  if (lower.includes('kaist') || lower.includes('master')) {
-    return '🎯 ¡Excelente objetivo! Para llegar a KAIST necesitas enfocarte en tres áreas clave:\n\n1. **GPA**: Mantener sobre 16/20 en los próximos semestres\n2. **Investigación**: Publicar al menos un paper en tu área de interés (quantum computing o algorithms)\n3. **Idioma**: TOPIK 6 es fundamental — empieza con 30 min diarios\n\n¿En cuál de estas áreas quieres profundizar hoy? 💪';
-  }
-
-  if (lower.includes('algoritmo') || lower.includes('dp') || lower.includes('grafo')) {
-    return '💻 Para mejorar en algoritmos en Codeforces:\n\n**Plan semanal sugerido:**\n- Lun/Mié/Vie: 2 problemas Div2 (A+B rápidos + 1 C)\n- Mar/Jue: Estudiar 1 tema nuevo (DP, grafos, etc.)\n- Sáb: Virtual contest\n- Dom: Revisión y notas\n\n¿Cuál es tu problema más frecuente? ¿Time Limit o Wrong Answer? 🤔';
-  }
-
-  if (lower.includes('quantum') || lower.includes('qubits')) {
-    return '⚛️ El Quantum Computing es fascinante. Para empezar:\n\n1. **Nielsen & Chuang** - "Quantum Computation and Quantum Information" (la biblia)\n2. **Qiskit** - Framework de IBM, gratuito y con tutoriales excelentes\n3. **arXiv:quant-ph** - Papers actuales\n\nComienza con los principios de superposición y entrelazamiento. ¿Tienes base en álgebra lineal? 📚';
-  }
-
-  if (lower.includes('codeforces') || lower.includes('rating')) {
-    return '📈 Para subir de 1250 a 2000 en Codeforces:\n\n**Roadmap:**\n- 1250→1400: Dominar DP básica, BFS/DFS, implementación\n- 1400→1600: Grafos avanzados, DP con optimizaciones\n- 1600→1800: Segment trees, Fenwick, math\n- 1800→2000: Advanced DP, flows, competitive geometry\n\n¡Practica consistentemente! 100 problemas al mes mínimo. 🔥';
-  }
-
-  return '🤖 ¡Hola! Soy Quantum AI, tu asistente académico. Puedo ayudarte con:\n\n- 💻 Algoritmos y Competitive Programming\n- ⚛️ Quantum Computing\n- 📚 Planes de estudio\n- 🇰🇷 Preparación para KAIST\n- 📝 Revisión de notas\n\n⚙️ *Nota: Para respuestas con IA real, configura tu `VITE_OPENAI_API_KEY` en el archivo `.env`*\n\n¿En qué te puedo ayudar hoy? 🚀';
+  const data = await response.json()
+  return data.content?.map((b: { type: string; text?: string }) => b.text || '').join('') || 'Sin respuesta.'
 }
