@@ -11,8 +11,8 @@ export function NotesPage() {
   const { createNote } = useNotesStore();
   const { incrementNotes } = useAppStore();
 
-  const handleNew = () => {
-    createNote();
+  const handleNew = async () => {
+    await createNote();
     incrementNotes();
   };
 

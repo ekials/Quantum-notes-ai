@@ -1,9 +1,11 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, CheckSquare, FileText, Bot,
-  TrendingUp, Trophy, Atom, ChevronRight,
+  TrendingUp, Trophy, Atom, ChevronRight, LogOut,
+  CalendarDays, Timer, Wallet,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
+import { useAuthStore } from '../store/useAuthStore';
 import { getLevelTitle } from '../utils/progressUtils';
 
 const NAV = [
@@ -13,11 +15,21 @@ const NAV = [
   { path: '/ai', label: 'Quantum AI', icon: Bot },
   { path: '/tracking', label: 'Progreso', icon: TrendingUp },
   { path: '/gamification', label: 'Logros', icon: Trophy },
+  { path: '/calendar', label: 'Calendario', icon: CalendarDays },
+  { path: '/pomodoro', label: 'Pomodoro', icon: Timer },
+  { path: '/finance', label: 'Finanzas', icon: Wallet },
 ];
 
 export function Sidebar() {
   const { level, xp, levelProgress, streak } = useAppStore();
+  const { signOut, user } = useAuthStore();
+  const navigate = useNavigate();
   const title = getLevelTitle(level);
+
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <aside className="w-60 min-h-screen flex flex-col bg-dark-950/80 backdrop-blur border-r border-white/5">
@@ -93,6 +105,32 @@ export function Sidebar() {
           <p className="text-[10px] text-gray-500 uppercase tracking-widest">Objetivo</p>
           <p className="text-xs text-primary-300 font-semibold mt-0.5">KAIST 2029 🇰🇷</p>
         </div>
+
+        {/* User + Sign Out */}
+        {user && (
+          <div className="mt-3 flex items-center gap-2">
+            {user.user_metadata?.avatar_url && (
+              <img
+                src={user.user_metadata.avatar_url}
+                alt="Avatar"
+                className="w-7 h-7 rounded-full border border-primary-500/30"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-gray-400 truncate">
+                {user.user_metadata?.full_name ?? user.email}
+              </p>
+            </div>
+            <button
+              id="btn-signout"
+              onClick={handleSignOut}
+              title="Cerrar sesión"
+              className="text-gray-600 hover:text-red-400 transition-colors p-1"
+            >
+              <LogOut size={13} />
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

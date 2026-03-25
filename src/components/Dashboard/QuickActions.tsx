@@ -9,8 +9,8 @@ export function QuickActions() {
   const createNote = useNotesStore((s) => s.createNote);
   const incrementNotes = useAppStore((s) => s.incrementNotes);
 
-  const handleNewNote = () => {
-    createNote();
+  const handleNewNote = async () => {
+    await createNote();
     incrementNotes();
     navigate('/notes');
   };

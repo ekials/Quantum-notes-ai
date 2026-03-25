@@ -1,21 +1,21 @@
 // src/store/useNotesStore.ts
-// Actualizado con soporte de carpetas anidadas
+// Conectado a Supabase — folders y notes se persisten en PostgreSQL
 
 import { create } from 'zustand';
-import { storageService } from '../services/storageService';
-import { DEFAULT_FOLDERS } from '../utils/constants';
+import { notesService } from '../services/notesService';
+import { type Note as SupabaseNote, type Folder as SupabaseFolder } from '../lib/supabase';
 
 export interface Note {
   id: string;
   title: string;
   content: string;
-  folder: string; // path completo: "UCSP Sem 5/ADA" o "UCSP Sem 5"
+  folder: string | null; // folder_id de Supabase
   tags: string[];
   createdAt: string;
   updatedAt: string;
+  isPinned?: boolean;
 }
 
-// Carpeta con soporte de subcarpetas
 export interface Folder {
   id: string;
   name: string;
@@ -24,47 +24,29 @@ export interface Folder {
   color?: string;
 }
 
-interface NotesState {
-  notes: Note[];
-  folders: Folder[];
-  activeFolder: string | null; // folder id
-  searchQuery: string;
-  activeNoteId: string | null;
-  expandedFolders: string[]; // ids de carpetas abiertas en el panel
-
-  // Actions — notas
-  createNote: (folderId?: string) => Note;
-  updateNote: (id: string, changes: Partial<Pick<Note, 'title' | 'content' | 'folder' | 'tags'>>) => void;
-  deleteNote: (id: string) => void;
-  setSearch: (query: string) => void;
-  setActiveNote: (id: string | null) => void;
-  getFilteredNotes: () => Note[];
-  getNoteById: (id: string) => Note | undefined;
-
-  // Actions — carpetas
-  setFolder: (folderId: string | null) => void;
-  addFolder: (name: string, parentId?: string | null, icon?: string) => Folder;
-  renameFolder: (id: string, newName: string) => void;
-  deleteFolder: (id: string) => void;
-  toggleExpand: (id: string) => void;
-
-  // Utils
-  getFolderPath: (folderId: string) => string; // "UCSP Sem 5 / ADA"
-  getChildFolders: (parentId: string | null) => Folder[];
-  getFolderById: (id: string) => Folder | undefined;
-  countNotesInFolder: (folderId: string, includeChildren?: boolean) => number;
+// Mapeo Supabase → tipos locales
+function toLocalNote(n: SupabaseNote): Note {
+  return {
+    id: n.id,
+    title: n.title,
+    content: n.content,
+    folder: n.folder_id,
+    tags: n.tags ?? [],
+    createdAt: n.created_at,
+    updatedAt: n.updated_at,
+    isPinned: n.is_pinned,
+  };
 }
 
-// Convertir DEFAULT_FOLDERS (strings) a estructura Folder
-const buildDefaultFolders = (): Folder[] => {
-  return DEFAULT_FOLDERS.map((name, i) => ({
-    id: `folder_default_${i}`,
-    name,
-    parentId: null,
-    icon: getFolderIcon(name),
-    color: '#7c6af5',
-  }));
-};
+function toLocalFolder(f: SupabaseFolder): Folder {
+  return {
+    id: f.id,
+    name: f.name,
+    parentId: null, // Supabase folders no tienen parentId en el schema actual
+    icon: f.icon,
+    color: f.color,
+  };
+}
 
 function getFolderIcon(name: string): string {
   if (name.includes('UCSP') || name.includes('Sem')) return '🏫';
@@ -77,84 +59,86 @@ function getFolderIcon(name: string): string {
   return '📁';
 }
 
-const SAMPLE_NOTES: Note[] = [
-  {
-    id: 'note_sample_1',
-    title: 'Plan de ataque: Codeforces 2000',
-    folder: 'folder_default_2', // Competitive Programming
-    tags: ['algoritmos', 'codeforces', 'plan'],
-    content: `# Roadmap Codeforces 1250 → 2000
+interface NotesState {
+  userId: string | null;
+  notes: Note[];
+  folders: Folder[];
+  activeFolder: string | null;
+  searchQuery: string;
+  activeNoteId: string | null;
+  expandedFolders: string[];
+  isLoading: boolean;
 
-## Etapa 1: 1250 → 1400
-- [ ] DP básica (0/1 knapsack, LCS, LIS)
-- [ ] BFS/DFS y variaciones
-- [ ] Implementación rápida
+  // Data loading
+  loadFromSupabase: (userId: string) => Promise<void>;
 
-## Etapa 2: 1400 → 1600
-- [ ] Grafos (Dijkstra, Floyd, MST)
-- [ ] DP con optimizaciones
-- [ ] Matemáticas: primos, modular arithmetic
+  // Actions — notas
+  createNote: (folderId?: string) => Promise<Note | null>;
+  updateNote: (id: string, changes: Partial<Pick<Note, 'title' | 'content' | 'folder' | 'tags' | 'isPinned'>>) => void;
+  deleteNote: (id: string) => void;
+  setSearch: (query: string) => void;
+  setActiveNote: (id: string | null) => void;
+  getFilteredNotes: () => Note[];
+  getNoteById: (id: string) => Note | undefined;
 
-\`\`\`cpp
-int dp[MAXN];
-dp[0] = 0;
-for (int i = 1; i <= n; i++) {
-    dp[i] = max(dp[i-1], dp[i-2] + val[i]);
+  // Actions — carpetas
+  setFolder: (folderId: string | null) => void;
+  addFolder: (name: string, parentId?: string | null, icon?: string) => Promise<Folder | null>;
+  renameFolder: (id: string, newName: string) => void;
+  deleteFolder: (id: string) => void;
+  toggleExpand: (id: string) => void;
+
+  // Utils
+  getFolderPath: (folderId: string) => string;
+  getChildFolders: (parentId: string | null) => Folder[];
+  getFolderById: (id: string) => Folder | undefined;
+  countNotesInFolder: (folderId: string, includeChildren?: boolean) => number;
 }
-\`\`\`
-`,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: 'note_sample_2',
-    title: 'Introducción al Quantum Computing',
-    folder: 'folder_default_3', // Investigación
-    tags: ['quantum', 'kaist', 'papers'],
-    content: `# Quantum Computing — Conceptos Base
-
-## Principios fundamentales
-1. **Superposición**: Un qubit puede ser 0 y 1 simultáneamente
-2. **Entrelazamiento**: Correlación cuántica entre qubits
-3. **Interferencia**: Amplitud de probabilidades
-
-## Papers prioritarios
-- Grover (1996): Búsqueda en O(√N)
-- Nielsen & Chuang (2000): Textbook base
-`,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
-const savedNotes = storageService.get<Note[]>('notes_v2', SAMPLE_NOTES);
-const savedFolders = storageService.get<Folder[]>('folders_v2', buildDefaultFolders());
-const savedExpanded = storageService.get<string[]>('expanded_folders', []);
 
 export const useNotesStore = create<NotesState>((set, get) => ({
-  notes: savedNotes,
-  folders: savedFolders,
+  userId: null,
+  notes: [],
+  folders: [],
   activeFolder: null,
   searchQuery: '',
   activeNoteId: null,
-  expandedFolders: savedExpanded,
+  expandedFolders: [],
+  isLoading: false,
+
+  // ── CARGA DESDE SUPABASE ──────────────────────────────────
+
+  loadFromSupabase: async (userId: string) => {
+    set({ isLoading: true, userId });
+    try {
+      const [rawFolders, rawNotes] = await Promise.all([
+        notesService.getFolders(userId),
+        notesService.getNotes(userId),
+      ]);
+      const folders = rawFolders.map(toLocalFolder);
+      const notes = rawNotes.map(toLocalNote);
+      set({ folders, notes });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
 
   // ── NOTAS ──────────────────────────────────────────────
 
-  createNote: (folderId) => {
-    const targetFolder = folderId ?? get().activeFolder ?? savedFolders[0]?.id ?? '';
-    const newNote: Note = {
-      id: `note_${Date.now()}`,
-      title: 'Nueva nota',
-      content: '# Nueva nota\n\nEmpieza a escribir aquí...',
-      folder: targetFolder,
-      tags: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    const updated = [newNote, ...get().notes];
-    set({ notes: updated, activeNoteId: newNote.id });
-    storageService.set('notes_v2', updated);
+  createNote: async (folderId) => {
+    const { userId, activeFolder, folders } = get();
+    if (!userId) return null;
+
+    const targetFolder = folderId ?? activeFolder ?? folders[0]?.id ?? null;
+    const created = await notesService.createNote(
+      userId,
+      'Nueva nota',
+      targetFolder ?? null,
+      '# Nueva nota\n\nEmpieza a escribir aquí...'
+    );
+    if (!created) return null;
+
+    const newNote = toLocalNote(created);
+    set(s => ({ notes: [newNote, ...s.notes], activeNoteId: newNote.id }));
     return newNote;
   },
 
@@ -163,32 +147,33 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       n.id === id ? { ...n, ...changes, updatedAt: new Date().toISOString() } : n
     );
     set({ notes: updated });
-    storageService.set('notes_v2', updated);
+
+    // Mapear al formato Supabase
+    const supabaseChanges: Parameters<typeof notesService.updateNote>[1] = {};
+    if ('title' in changes) supabaseChanges.title = changes.title;
+    if ('content' in changes) supabaseChanges.content = changes.content;
+    if ('tags' in changes) supabaseChanges.tags = changes.tags;
+    if ('folder' in changes) supabaseChanges.folder_id = changes.folder ?? null;
+    if ('isPinned' in changes) supabaseChanges.is_pinned = changes.isPinned;
+
+    notesService.updateNote(id, supabaseChanges);
   },
 
   deleteNote: (id) => {
     const updated = get().notes.filter((n) => n.id !== id);
     const wasActive = get().activeNoteId === id;
     set({ notes: updated, activeNoteId: wasActive ? (updated[0]?.id ?? null) : get().activeNoteId });
-    storageService.set('notes_v2', updated);
+    notesService.deleteNote(id);
   },
 
   setSearch: (query) => set({ searchQuery: query }),
   setActiveNote: (id) => set({ activeNoteId: id }),
 
   getFilteredNotes: () => {
-    const { notes, activeFolder, searchQuery, folders } = get();
-
-    // Si hay carpeta activa, incluir también notas de subcarpetas
-    const getDescendantIds = (folderId: string): string[] => {
-      const children = folders.filter(f => f.parentId === folderId).map(f => f.id);
-      return [folderId, ...children.flatMap(id => getDescendantIds(id))];
-    };
+    const { notes, activeFolder, searchQuery } = get();
 
     return notes.filter((note) => {
-      const matchesFolder = !activeFolder ||
-        getDescendantIds(activeFolder).includes(note.folder);
-
+      const matchesFolder = !activeFolder || note.folder === activeFolder;
       const q = searchQuery.toLowerCase();
       const matchesSearch =
         !q ||
@@ -206,26 +191,22 @@ export const useNotesStore = create<NotesState>((set, get) => ({
 
   setFolder: (folderId) => set({ activeFolder: folderId }),
 
-  addFolder: (name, parentId = null, icon) => {
-    const newFolder: Folder = {
-      id: `folder_${Date.now()}`,
-      name: name.trim(),
-      parentId,
-      icon: icon ?? (parentId ? '📄' : getFolderIcon(name)),
-      color: '#7c6af5',
-    };
-    const updated = [...get().folders, newFolder];
-    set({ folders: updated });
-    storageService.set('folders_v2', updated);
+  addFolder: async (name, _parentId = null, icon) => {
+    const { userId, folders } = get();
+    if (!userId) return null;
 
-    // Auto-expandir la carpeta padre
-    if (parentId) {
-      const expanded = [...get().expandedFolders];
-      if (!expanded.includes(parentId)) {
-        set({ expandedFolders: [...expanded, parentId] });
-        storageService.set('expanded_folders', [...expanded, parentId]);
-      }
-    }
+    const resolvedIcon = icon ?? getFolderIcon(name);
+    const created = await notesService.createFolder(
+      userId,
+      name.trim(),
+      resolvedIcon,
+      '#7c6af5',
+      folders.length
+    );
+    if (!created) return null;
+
+    const newFolder = toLocalFolder(created);
+    set(s => ({ folders: [...s.folders, newFolder] }));
     return newFolder;
   },
 
@@ -234,32 +215,21 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       f.id === id ? { ...f, name: newName.trim() } : f
     );
     set({ folders: updated });
-    storageService.set('folders_v2', updated);
+    notesService.renameFolder(id, newName.trim());
   },
 
   deleteFolder: (id) => {
-    // Obtener todos los descendientes para borrarlos también
-    const getDescendantIds = (folderId: string): string[] => {
-      const children = get().folders.filter(f => f.parentId === folderId).map(f => f.id);
-      return [folderId, ...children.flatMap(childId => getDescendantIds(childId))];
-    };
-
-    const toDelete = getDescendantIds(id);
-    const updatedFolders = get().folders.filter(f => !toDelete.includes(f.id));
-
-    // Mover notas huérfanas a la raíz (primera carpeta)
-    const firstFolder = updatedFolders[0]?.id ?? '';
+    const updatedFolders = get().folders.filter(f => f.id !== id);
+    const firstFolder = updatedFolders[0]?.id ?? null;
     const updatedNotes = get().notes.map(n =>
-      toDelete.includes(n.folder) ? { ...n, folder: firstFolder } : n
+      n.folder === id ? { ...n, folder: firstFolder } : n
     );
-
     set({
       folders: updatedFolders,
       notes: updatedNotes,
-      activeFolder: get().activeFolder && toDelete.includes(get().activeFolder!) ? null : get().activeFolder
+      activeFolder: get().activeFolder === id ? null : get().activeFolder,
     });
-    storageService.set('folders_v2', updatedFolders);
-    storageService.set('notes_v2', updatedNotes);
+    notesService.deleteFolder(id);
   },
 
   toggleExpand: (id) => {
@@ -268,20 +238,14 @@ export const useNotesStore = create<NotesState>((set, get) => ({
       ? expanded.filter(e => e !== id)
       : [...expanded, id];
     set({ expandedFolders: updated });
-    storageService.set('expanded_folders', updated);
   },
 
   // ── UTILS ──────────────────────────────────────────────
 
   getFolderPath: (folderId) => {
     const { folders } = get();
-    const parts: string[] = [];
-    let current = folders.find(f => f.id === folderId);
-    while (current) {
-      parts.unshift(current.name);
-      current = current.parentId ? folders.find(f => f.id === current!.parentId) : undefined;
-    }
-    return parts.join(' / ');
+    const folder = folders.find(f => f.id === folderId);
+    return folder?.name ?? folderId;
   },
 
   getChildFolders: (parentId) => {
@@ -292,16 +256,7 @@ export const useNotesStore = create<NotesState>((set, get) => ({
     return get().folders.find(f => f.id === id);
   },
 
-  countNotesInFolder: (folderId, includeChildren = true) => {
-    const { notes, folders } = get();
-    if (!includeChildren) {
-      return notes.filter(n => n.folder === folderId).length;
-    }
-    const getDescendantIds = (id: string): string[] => {
-      const children = folders.filter(f => f.parentId === id).map(f => f.id);
-      return [id, ...children.flatMap(childId => getDescendantIds(childId))];
-    };
-    const allIds = getDescendantIds(folderId);
-    return notes.filter(n => allIds.includes(n.folder)).length;
+  countNotesInFolder: (folderId, _includeChildren = true) => {
+    return get().notes.filter(n => n.folder === folderId).length;
   },
 }));

@@ -2,7 +2,7 @@
 // Panel de carpetas con soporte de subcarpetas anidadas
 
 import { useState, useRef, useEffect } from 'react';
-import { ChevronRight, FolderOpen, Folder, Plus, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { ChevronRight, FolderOpen, Plus, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import { useNotesStore } from '../../store/useNotesStore';
 import type { Folder as FolderType } from '../../store/useNotesStore';
 
@@ -194,7 +194,6 @@ function FolderRow({
 // ── Panel principal ────────────────────────────────────────
 export function FolderPanel() {
   const {
-    folders,
     activeFolder,
     setFolder,
     notes,

@@ -1,8 +1,8 @@
 import { create } from 'zustand';
-import { storageService } from '../services/storageService';
 import { getLevel, getLevelProgress } from '../utils/progressUtils';
 import { getCurrentDateKey } from '../utils/dateUtils';
 import { XP_PER_TASK } from '../utils/constants';
+import { profileService } from '../services/profileService';
 
 export interface Achievement {
   id: string;
@@ -24,6 +24,9 @@ const ACHIEVEMENTS: Achievement[] = [
 ];
 
 interface AppState {
+  // Identificador del usuario autenticado
+  userId: string | null;
+
   xp: number;
   level: number;
   levelProgress: number;
@@ -32,7 +35,9 @@ interface AppState {
   achievements: Achievement[];
   totalTasksCompleted: number;
   totalNotesCreated: number;
+
   // Actions
+  loadFromSupabase: (userId: string) => Promise<void>;
   addXp: (amount: number) => void;
   updateStreak: () => void;
   checkAchievements: () => void;
@@ -40,28 +45,53 @@ interface AppState {
   incrementNotes: () => void;
 }
 
-const saved = storageService.get<Partial<AppState>>('app_state', {});
-
 export const useAppStore = create<AppState>((set, get) => ({
-  xp: saved.xp ?? 0,
-  level: saved.level ?? 1,
-  levelProgress: saved.levelProgress ?? 0,
-  streak: saved.streak ?? 0,
-  lastActiveDate: saved.lastActiveDate ?? null,
-  achievements: saved.achievements ?? [],
-  totalTasksCompleted: saved.totalTasksCompleted ?? 0,
-  totalNotesCreated: saved.totalNotesCreated ?? 0,
+  userId: null,
+  xp: 0,
+  level: 1,
+  levelProgress: 0,
+  streak: 0,
+  lastActiveDate: null,
+  achievements: [],
+  totalTasksCompleted: 0,
+  totalNotesCreated: 0,
+
+  loadFromSupabase: async (userId: string) => {
+    const profile = await profileService.getProfile(userId);
+    if (!profile) return;
+
+    const xp = profile.xp_total;
+    set({
+      userId,
+      xp,
+      level: getLevel(xp),
+      levelProgress: getLevelProgress(xp),
+      streak: profile.streak_days,
+      lastActiveDate: profile.last_active,
+      totalTasksCompleted: 0, // No hay contador en BD, se puede agregar después
+      totalNotesCreated: 0,
+    });
+  },
 
   addXp: (amount: number) => {
+    const { userId } = get();
     const newXp = get().xp + amount;
     const newLevel = getLevel(newXp);
     const newProgress = getLevelProgress(newXp);
     set({ xp: newXp, level: newLevel, levelProgress: newProgress });
-    storageService.set('app_state', get());
+
+    // Persistir en Supabase
+    if (userId) {
+      profileService.updateProfile(userId, {
+        xp_total: newXp,
+        level: newLevel,
+      });
+    }
     get().checkAchievements();
   },
 
   updateStreak: () => {
+    const { userId } = get();
     const today = getCurrentDateKey();
     const last = get().lastActiveDate;
     if (last === today) return;
@@ -72,7 +102,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const newStreak = last === yesterdayKey ? get().streak + 1 : 1;
     set({ streak: newStreak, lastActiveDate: today });
-    storageService.set('app_state', get());
+
+    // Persistir en Supabase
+    if (userId) {
+      profileService.updateProfile(userId, {
+        streak_days: newStreak,
+        last_active: today,
+      });
+    }
     get().checkAchievements();
   },
 
@@ -102,7 +139,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (changed) {
       set({ achievements: newAchievements });
-      storageService.set('app_state', get());
     }
   },
 
@@ -114,7 +150,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   incrementNotes: () => {
     set((s) => ({ totalNotesCreated: s.totalNotesCreated + 1 }));
-    storageService.set('app_state', get());
     get().checkAchievements();
   },
 }));

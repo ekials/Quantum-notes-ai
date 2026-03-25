@@ -410,6 +410,28 @@ export const getPomodoroStats = async (userId: string) => {
   }
 }
 
+export type PomodoroSessionRow = {
+  id: string
+  user_id: string
+  subject: string
+  duration_min: number
+  completed: boolean
+  date: string
+}
+
+export const getPomodoroSessionsHistory = async (userId: string, limit = 30): Promise<PomodoroSessionRow[]> => {
+  const { data, error } = await supabase
+    .from('pomodoro_sessions')
+    .select('id, user_id, subject, duration_min, completed, date')
+    .eq('user_id', userId)
+    .eq('completed', true)
+    .order('date', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return (data || []) as PomodoroSessionRow[]
+}
+
 // ============================================================
 // QUOTES — Frases motivacionales
 // ============================================================
